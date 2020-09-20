@@ -11,6 +11,8 @@
   Schema:
     'data' of RF433 receiver needs be plugged on PIN 'D2' of Arduino.
     'data' of RF433 transmitter needs be plugged on PIN 'D3' of Arduino.
+
+  Also receives instructions from USB.
 */
 
 /*
@@ -43,9 +45,28 @@
   along with this program.  If not, see <https://www.gnu.org/licenses>.
 */
 
-#define NOOP_BLINK
+/*
+  TODO (~FIXME actually...)
+  The management of 'OP' code that must follow 'CL' code (to stop slater before
+  it reaches the end) is uggly, needs proper redev. Not only is it ignoring
+  *data argument (in the function registered for later execution), but it is
+  deeply flawed. Proper way to manage it would be for example:
+  - Create a Slater object that manages its open and close codes.
+  - Have it recognize whether or not the CL code shall be followed by OP code,
+    depending on its status.
+  The slater will then be able to manage its status ('I am open', 'I am
+  closed'), to make a decision.
+  Also doing this way will allow smooth implementation of thresholds to avoid
+  too frequent actions and protect slaters, like for example: no more than 1
+  action per second, no more than 12 per minute, no more than 24 per hour, no
+  more than 48 per day. This'd allow usual, regular actions while blocking crazy
+  requests due to a bug or compromission of the source of orders.
+  The current code would make it complicated to implement such thresholds.
+*/
 
-#define DEBUG
+//#define DEBUG
+
+#define NOOP_BLINK
 
 #define ARRAYSZ(a) (sizeof(a) / sizeof(*a))
 
@@ -92,6 +113,7 @@ code_t codes[] = {
 
 #include "sonoff.h"
 #include "adf.h"
+#include "serial_speed.h"
 
 #ifdef DEBUG
 
@@ -110,14 +132,9 @@ static void serial_printf(const char *fmt, ...) {
     Serial.print(serial_printf_buffer);
 }
 
-static void serial_begin(long speed) {
-    Serial.begin(speed);
-}
-
 #else // DEBUG
 
 #define serial_printf(...)
-#define serial_begin(speed)
 
 #endif // DEBUG
 
@@ -258,7 +275,7 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 void setup() {
-    serial_begin(115200);
+    Serial.begin(SERIAL_SPEED_INTEGER);
     serial_printf("Start\n");
 
     pinMode(PIN_RFINPUT, INPUT);
@@ -372,7 +389,7 @@ void SerialLine::do_events() {
     buf[head] = '\0';
 
         // Remove trailing cr and/or nl
-        // FIXME
+        // FIXME?
         //   WON'T WORK WITH MAC NEWLINES!
         //   (SEE ABOVE: NO STOP IF ONLY CR ENCOUNTERED)
     if (head >= 1 && buf[head - 1] == '\n')

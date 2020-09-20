@@ -7,6 +7,8 @@ France" (adf) slater.
 - Receive from an RF 433 Mhz receiver.
 - Send with an RF 433 Mhz transmitter.
 
+Also can receive instructions from USB.
+
 Schema:
 
 - 'data' of RF433 receiver needs be plugged on PIN 'D2' of Arduino.
@@ -17,6 +19,9 @@ Sonoff codes are made of 24-bit codes encoded in a
 library.
 
 Adf codes are made of 32-bit codes encoded in Manchester, see Adf library.
+
+serial_speed.h is hard-linked (on my PC...   ;-) ) with mapper-devusb project,
+as this one and mapper-devusb must share it.
 
 
 Usage
