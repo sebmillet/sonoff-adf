@@ -43,34 +43,36 @@
   along with this program.  If not, see <https://www.gnu.org/licenses>.
 */
 
+#define NOOP_BLINK
+
 #define DEBUG
 
 #define ARRAYSZ(a) (sizeof(a) / sizeof(*a))
 
   // Input (codes received from Sonoff telecommand)
-#define CODE_BTN_HAUT     0x00b94d24
-#define CODE_BTN_BAS      0x00b94d22
+#define CODE_IN_BTN_HAUT     0x00b94d24
+#define CODE_IN_BTN_BAS      0x00b94d22
 
     // Salon
-#define CODE_VOLET1_OPEN  0x40A2BBAE
-#define CODE_VOLET1_CLOSE 0x40A2BBAD
+#define CODE_OUT_VOLET1_OPEN  0x40A2BBAE
+#define CODE_OUT_VOLET1_CLOSE 0x40A2BBAD
     // Salle à manger
-#define CODE_VOLET2_OPEN  0x4003894D
-#define CODE_VOLET2_CLOSE 0x4003894E
+#define CODE_OUT_VOLET2_OPEN  0x4003894D
+#define CODE_OUT_VOLET2_CLOSE 0x4003894E
     // Chambre
-#define CODE_VOLET3_OPEN  0x4078495E
-#define CODE_VOLET3_CLOSE 0x4078495D
+#define CODE_OUT_VOLET3_OPEN  0x4078495E
+#define CODE_OUT_VOLET3_CLOSE 0x4078495D
 
 unsigned long codes_openall[] = {
-    CODE_VOLET1_OPEN,
-    CODE_VOLET2_OPEN,
-    CODE_VOLET3_OPEN
+    CODE_OUT_VOLET1_OPEN,
+    CODE_OUT_VOLET2_OPEN,
+    CODE_OUT_VOLET3_OPEN
 };
 
 unsigned long codes_closeall[] = {
-    CODE_VOLET1_CLOSE,
-    CODE_VOLET2_CLOSE,
-    CODE_VOLET3_CLOSE
+    CODE_OUT_VOLET1_CLOSE,
+    CODE_OUT_VOLET2_CLOSE,
+    CODE_OUT_VOLET3_CLOSE
 };
 
 typedef struct {
@@ -80,8 +82,8 @@ typedef struct {
 } code_t;
 
 code_t codes[] = {
-    { CODE_BTN_HAUT,  codes_openall,  ARRAYSZ(codes_openall)  },
-    { CODE_BTN_BAS,   codes_closeall, ARRAYSZ(codes_closeall) }
+    { CODE_IN_BTN_HAUT,  codes_openall,  ARRAYSZ(codes_openall)  },
+    { CODE_IN_BTN_BAS,   codes_closeall, ARRAYSZ(codes_closeall) }
 };
 
   // Comment the below line if you don't want a LED to show RF transmission is
@@ -155,14 +157,29 @@ void cancel_schedules() {
 
 bool busy = false;
 
+void turn_led_on() {
+#ifdef PIN_LED
+    digitalWrite(PIN_LED, HIGH);
+#endif
+}
+
+void turn_led_off() {
+#ifdef PIN_LED
+    digitalWrite(PIN_LED, LOW);
+#endif
+}
+
 Sonoff rx;
 Adf adf;
 
-#define OP CODE_VOLET2_OPEN
-#define CL CODE_VOLET2_CLOSE
+#define OP CODE_OUT_VOLET2_OPEN
+#define CL CODE_OUT_VOLET2_CLOSE
 
 void my_adf_rf_send_instruction(uint32_t code,
                                 bool schedule_deferred_code_as_appropriate);
+
+// FIXME
+//   OP sent (instead of using *data);
 void my_adf_deferred(void *data) {
     serial_printf("my_adf_deferred: execution\n");
     my_adf_rf_send_instruction(OP, false);
@@ -176,7 +193,9 @@ void my_adf_rf_send_instruction(uint32_t code,
 
     busy = true;
     unsigned long t_ms = millis();
+    turn_led_on();
     adf.rf_send_instruction(code);
+    turn_led_off();
     serial_printf(">>> [SND] = 0x%08lx\n", code);
 
     if (schedule_deferred_code_as_appropriate) {
@@ -202,8 +221,9 @@ void my_adf_rf_send_instruction(uint32_t code,
         }
 
         if (do_sched) {
-            schedule(t_ms + 16500, my_adf_deferred, nullptr);
-//            schedule(t_ms + 2650, my_adf_deferred, nullptr);
+                // FIXME, nullptr (whereas pointer to OP shall be used)
+            schedule(t_ms + 16500, my_adf_deferred, nullptr); // PROD
+//            schedule(t_ms + 2650, my_adf_deferred, nullptr); // TEST
         }
     }
 
@@ -243,17 +263,14 @@ void setup() {
 
     pinMode(PIN_RFINPUT, INPUT);
 
-#ifdef PIN_LED
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, LOW);
-#endif
+    turn_led_off();
 
-        // DEFENSIVE PROGRAMMING
-        // init() is called by Adf constructor, however we prefer to call it
-        // here again, to make sure the transmitter PIN is setup in OUTPUT mode
-        // and it is set to zero (no transmission).
-        // Indeed, it could be that the call from constructor is done too early
-        // in the board' start sequence.
+        // Defensive programming:
+        //   init() is called by Adf constructor, however we prefer to call it
+        //   here again, to make sure the transmitter PIN is setup in OUTPUT
+        //   mode and it is set to zero (no transmission).
+        //   Indeed, it could be that the call from constructor is done too
+        //   early in the board' start sequence.
         //
         // WHY WOULD THIS POINT BE SO IMPORTANT?
         //   If not handled properly, it could end up with TX left 'active' and
@@ -283,11 +300,7 @@ void setup() {
     sei();
 }
 
-void loop() {
-    serial_printf("Waiting for signal\n");
-
-    uint32_t val = rx.get_val(true);
-
+void manage_recv_from_rx(uint32_t val) {
     code_t* c = nullptr;
     for (byte i = 0; i < ARRAYSZ(codes); ++i) {
         if (val == codes[i].in_code) {
@@ -296,26 +309,228 @@ void loop() {
     }
 
     if (c) {
-
-#ifdef PIN_LED
-        digitalWrite(PIN_LED, HIGH);
-#endif
-
         cancel_schedules();
         delay(10);
         for (byte i = 0; i < c->out_nb_codes; ++i) {
             my_adf_rf_send_instruction(c->out_array_codes[i], true);
         }
-
-#ifdef PIN_LED
-        digitalWrite(PIN_LED, LOW);
-#endif
-
     }
-
     serial_printf("<<< [RCV] = 0x%08lx\n", val);
     if (!c) {
         serial_printf("   No code sent (unknown input code)\n");
+    }
+}
+
+
+//
+// SerialLine
+//
+// Manages USB input as lines.
+//
+// Interest = non blocking I/O. Serial.readString() works with timeout and a
+// null timeout is not well documented (meaning: even if zeroing timeout leads
+// to non-blocking I/O, I'm not sure it'll consistently and robustly *always*
+// behave this way).
+class SerialLine {
+    private:
+        char buf[83]; // 80-character strings (then CR+LF then NULL-terminating)
+        size_t head;
+        bool got_a_line;
+        void reset();
+
+    public:
+        SerialLine();
+
+        static const size_t buf_len;
+
+        void do_events();
+        bool is_line_available();
+        bool get_line(char *s, size_t len);
+        void split_s_into_func_args(char *s, char **func, char **args) const;
+};
+const size_t SerialLine::buf_len = sizeof(SerialLine::buf);
+
+SerialLine::SerialLine():head(0),got_a_line(false) { };
+
+void SerialLine::do_events() {
+    if (got_a_line)
+        return;
+    if (!Serial.available())
+        return;
+
+    int b;
+    do {
+        b = Serial.read();
+        if (b == -1)
+            break;
+        buf[head++] = (char)b;
+    } while (head < buf_len - 1 && b != '\n' && Serial.available());
+
+    if (head < buf_len - 1 && b != '\n')
+        return;
+
+    buf[head] = '\0';
+
+        // Remove trailing cr and/or nl
+        // FIXME
+        //   WON'T WORK WITH MAC NEWLINES!
+        //   (SEE ABOVE: NO STOP IF ONLY CR ENCOUNTERED)
+    if (head >= 1 && buf[head - 1] == '\n')
+        buf[--head] = '\0';
+    if (head >= 1 && buf[head - 1] == '\r')
+        buf[--head] = '\0';
+    got_a_line = true;
+}
+
+bool SerialLine::is_line_available() {
+    do_events();
+    return got_a_line;
+}
+
+void SerialLine::reset() {
+    head = 0;
+    got_a_line = false;
+}
+
+// Get USB input as a simple line, copied in caller buffer.
+// A 'line' is a set of non-null characters followed by 'new line', 'new line'
+// being either as per Unix or Windows convention, see below.
+// Returns true if a copy was done (there was a line available), false if not
+// (in which case, s is not updated).
+// The terminating newline character (or 2-character CR-LF sequence) is NOT part
+// of the string given to the caller.
+// If the line length is above the buffer size (SerialLine::buf_len), then it'll
+// be cut into smaller pieces.
+// Because of the way the received buffer is parsed, and when using CR-LF as
+// end-of-line marker (default even under Linux), it can result in a empty
+// string seen after a first string with a length close to the limit.
+//
+// About new lines:
+// - Works fine with Unix new lines (\n), tested
+// - Supposed to work fine with Windows new lines (\r\n), NOT TESTED
+// - WON'T WORK WITH MAC NEW LINES (\r)
+bool SerialLine::get_line(char *s, size_t len) {
+    do_events();
+    if (!got_a_line)
+        return false;
+    snprintf(s, len, buf);
+    reset();
+    return true;
+}
+
+// Take a string and splits it into 2 parts, one for the function name, one for
+// the arguments.
+//
+// IMPORTANT
+//   THE PROVIDED STRING, s, IS ALTERED BY THE OPERATION.
+//
+// The arguments are everything in parenthesis that follows the function name.
+// For example, if the line received is:
+//   myfunc(123, 456)
+// then
+//   func will point to the string
+//     myfunc
+//   args will point to the string
+//     123, 456
+//
+// If the string is not made of a function name followed by arguments in
+// parenthesis, then func will point to the complete line and args will point to
+// an empty string.
+//
+// Note the arguments parsing is basic, and there is no escape mechanism.
+// That is, a call like:
+//   myfunc("(bla)", 123)
+// won't be parsed properly, because the first closing parenthesis will be
+// considered as being the one that closes the function arguments. As it is
+// followed by trailing characters, it'll result in func pointing to the
+// complete string, and args pointing to an empty string.
+void SerialLine::split_s_into_func_args(char *s, char **func, char **args)
+        const {
+    size_t h = 0;
+    *func = s;
+    while (s[h] != '(' && s[h] != '\0')
+        h++;
+    if (s[h] == '(') {
+        char *open_parenthesis = s + h;
+        *args = s + h + 1;
+        while (s[h] != ')' && s[h] != '\0')
+            h++;
+        if (s[h] == ')') {
+            if (h < buf_len - 1 && s[h + 1] == '\0') {
+                *open_parenthesis = '\0';
+                s[h] = '\0';
+            } else {
+                    // Trailing characters after closing parenthesis -> no
+                    // arguments.
+                *args = NULL;
+            }
+        } else {
+                // No closing parenthesis -> no arguments
+            *args = NULL;
+        }
+    } else {
+        *args = NULL;
+    }
+}
+
+    // Convert a string (decimal or hex) into an unsigned long int.
+    // Assume hex if start is "0x", otherwise, assume decimal.
+unsigned long get_32bit_code(const char *code) {
+    if (code[0] == '0' && code[1] == 'x') {
+        return strtoul(code + 2, NULL, 16);
+    }
+    return strtoul(code, NULL, 10);
+}
+
+void rftx(const char *a) {
+    unsigned long code = get_32bit_code(a);
+
+    my_adf_rf_send_instruction(code, true);
+}
+
+void noop(const char *a) {
+#ifdef NOOP_BLINK
+    for (int i = 0; i < 2; ++i) {
+        turn_led_on();
+        delay(125);
+        turn_led_off();
+        delay(125);
+    }
+#endif // NOOP_BLINK
+}
+
+void manage_recv_serial(char *func, char*args) {
+    if (!strcmp(func, "rftx")) {
+        rftx(args);
+    } else if (!strcmp(func, "noop")) {
+        noop(args);
+    } else if (!strcmp(func, "")) {
+        // Do nothing if empty instruction
+        // Alternative: treat as an error
+    } else {
+            // Unknown function: we blink 4 times on internal LED
+        for (int i = 0; i < 4; ++i) {
+            turn_led_on();
+            delay(125);
+            turn_led_off();
+            delay(125);
+        }
+    }
+    serial_printf("<<< [USB] = function: [%s], arguments: [%s]\n", func, args);
+}
+
+SerialLine sl;
+char buffer[SerialLine::buf_len];
+
+void loop() {
+    uint32_t val;
+    if (rx.get_val_non_blocking(&val, true)) {
+        manage_recv_from_rx(val);
+    }
+    if (sl.get_line(buffer, sizeof(buffer))) {
+        char *func, *args;
+        sl.split_s_into_func_args(buffer, &func, &args);
+        manage_recv_serial(func, args);
     }
 }
 
